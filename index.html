@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Destiny 2 Loadout Tracker</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Destiny 2 Loadout Tracker</h1>
+    <p id="status-line">Loading manifest&hellip;</p>
+  </header>
+
+  <!-- Shown automatically if script.js still has the placeholder API key. -->
+  <div id="config-warning" class="warning" hidden>
+    Set <code>BUNGIE_API_KEY</code> and <code>ROSTER</code> at the top of
+    <code>script.js</code> before this will work.
+  </div>
+
+  <!-- Adds players to ROSTER on top of the manual list in script.js. -->
+  <section id="teammate-finder" aria-label="Auto-detect teammates">
+    <h2>Auto-detect Teammates</h2>
+    <form id="teammate-form">
+      <label for="seed-name-input">Find teammates from</label>
+      <input type="text" id="seed-name-input" placeholder="Name#1234" />
+      <span>'s last activity</span>
+      <button type="submit">Find</button>
+      <button type="button" id="refresh-teammates-btn">Refresh from last activity</button>
+    </form>
+    <p id="teammate-status"></p>
+  </section>
+
+  <main>
+    <section id="players" aria-label="Player loadout cards"></section>
+
+    <aside id="changes-panel" aria-label="Recent changes">
+      <h2>Recent Changes</h2>
+      <ul id="changes-feed"></ul>
+    </aside>
+  </main>
+
+  <footer>
+    <p>
+      Data from the Bungie.net Platform API. Polling every 45s.
+      Not affiliated with Bungie.
+    </p>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
