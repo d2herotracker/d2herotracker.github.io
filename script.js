@@ -38,14 +38,14 @@
 
 // ===================== CONFIG (edit this section) =======================
 
-const BUNGIE_API_KEY = "PASTE_MY_KEY_HERE";
+const BUNGIE_API_KEY = "1467c5e9a32e4ee4ba7c85669025b5e4";
 
-// One entry per player you want to track. Bungie Name format is
-// "DisplayName#1234" (the number is the "code" shown on their profile).
-const ROSTER = [
-  { displayName: "Guardian#0001" },
-  { displayName: "Guardian#0002" },
-];
+// Empty by default so nobody is tracked automatically. Add an entry here
+// only for people you want tracked every time the page loads, with no
+// clicking - everyone else can be added per-session via "Auto-detect
+// Teammates" on the page instead. Bungie Name format is "DisplayName#1234"
+// (the number is the "code" shown on their profile).
+const ROSTER = [];
 
 const POLL_INTERVAL_MS = 45 * 1000;
 
@@ -578,7 +578,9 @@ async function pollAll() {
 // ===================== INIT ================================================
 
 async function init() {
-  if (BUNGIE_API_KEY === "PASTE_MY_KEY_HERE" || ROSTER.length === 0) {
+  // An empty ROSTER is a valid setup now (auto-detect-only usage), so only
+  // warn about the API key - that one's required no matter what.
+  if (BUNGIE_API_KEY === "PASTE_MY_KEY_HERE") {
     $("#config-warning").hidden = false;
   }
 
