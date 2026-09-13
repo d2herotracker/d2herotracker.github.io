@@ -28,6 +28,10 @@
  *      Full report for one activity instance, including an "entries" array
  *      listing every player who was in it - that's how teammates are found.
  *
+ *  Both Stats endpoints above are called against stats.bungie.net (see
+ *  STATS_API_ROOT), not www.bungie.net - the latter can 30x-redirect Stats
+ *  calls to an insecure http:// URL, which browsers block as mixed content.
+ *
  * All requests require an X-API-Key header from a Bungie application:
  * https://www.bungie.net/en/Application
  *
@@ -53,6 +57,11 @@ const POLL_INTERVAL_MS = 45 * 1000;
 
 const API_ROOT = "https://www.bungie.net/Platform";
 const ICON_ROOT = "https://www.bungie.net";
+
+// Stats endpoints (activity history, PGCR) live behind www.bungie.net but
+// sometimes 30x-redirect to a plain-http stats.bungie.net, which browsers
+// block as mixed content - call this host directly to avoid that redirect.
+const STATS_API_ROOT = "https://stats.bungie.net/Platform";
 
 // Inventory bucket hashes, used to sort equipped items into slots.
 const WEAPON_BUCKETS = {
@@ -107,8 +116,9 @@ function escapeHtml(str) {
 
 // Wraps fetch() with the API key header and Bungie's envelope error format.
 // Bungie always returns HTTP 200 with an ErrorCode; 1 means success.
-async function bungieFetch(path, options = {}) {
-  const response = await fetch(API_ROOT + path, {
+// `root` defaults to the main API but can be overridden (see STATS_API_ROOT).
+async function bungieFetch(path, options = {}, root = API_ROOT) {
+  const response = await fetch(root + path, {
     ...options,
     headers: { "X-API-Key": BUNGIE_API_KEY, ...options.headers },
   });
@@ -419,7 +429,9 @@ async function findLatestActivityInstanceId(membership, characterIds) {
   const requests = characterIds.map((characterId) =>
     bungieFetch(
       `/Destiny2/${membership.membershipType}/Account/${membership.membershipId}` +
-        `/Character/${characterId}/Stats/Activities/?count=1&mode=0&page=0`
+        `/Character/${characterId}/Stats/Activities/?count=1&mode=0&page=0`,
+      {},
+      STATS_API_ROOT
     ).catch(() => null)
   );
 
@@ -505,7 +517,7 @@ async function findTeammatesFromActivity(seedName) {
     const instanceId = await findLatestActivityInstanceId(membership, characterIds);
     if (!instanceId) throw new Error("No recent activity history found (profile may be private)");
 
-    const pgcr = await bungieFetch(`/Destiny2/Stats/PostGameCarnageReport/${instanceId}/`);
+    const pgcr = await bungieFetch(`/Destiny2/Stats/PostGameCarnageReport/${instanceId}/`, {}, STATS_API_ROOT);
     const teammates = extractTeammatesFromPgcr(pgcr);
     const added = mergeIntoRoster(teammates);
     const activityName = getActivityName(pgcr.activityDetails.referenceId);
