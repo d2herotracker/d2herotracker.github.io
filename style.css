@@ -157,7 +157,12 @@ main {
   flex-shrink: 0;
 }
 
-.subclass-line { margin-top: 6px; }
+.subclass-line {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 
 .pill-row {
   display: flex;
@@ -174,11 +179,21 @@ main {
 }
 
 .pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 2px 8px;
+  padding: 2px 8px 2px 2px;
   font-size: 0.75rem;
+}
+
+.pill-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 #changes-panel {

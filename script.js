@@ -347,9 +347,18 @@ function renderItemRow(slotLabel, itemHash) {
     </div>`;
 }
 
+// Small icon + name pill, shared by aspects and fragments.
+function renderPill(hash) {
+  const def = getItemDef(hash);
+  const icon = iconUrl(def);
+  return `<span class="pill">${icon ? `<img class="pill-icon" src="${icon}" alt="" />` : ""}${escapeHtml(itemName(hash))}</span>`;
+}
+
 function renderCharacter(characterId, loadout) {
-  const aspectPills = loadout.aspects.map((h) => `<span class="pill">${escapeHtml(itemName(h))}</span>`).join("");
-  const fragmentPills = loadout.fragments.map((h) => `<span class="pill">${escapeHtml(itemName(h))}</span>`).join("");
+  const aspectPills = loadout.aspects.map(renderPill).join("");
+  const fragmentPills = loadout.fragments.map(renderPill).join("");
+  const subclassDef = loadout.subclassHash ? getItemDef(loadout.subclassHash) : null;
+  const subclassIcon = iconUrl(subclassDef);
   const subclassName = loadout.subclassHash ? itemName(loadout.subclassHash) : "Unknown";
 
   return `
@@ -363,7 +372,10 @@ function renderCharacter(characterId, loadout) {
       ${renderItemRow("Chest", loadout.armor.Chest)}
       ${renderItemRow("Legs", loadout.armor.Legs)}
       ${renderItemRow("Class", loadout.armor.Class)}
-      <div class="subclass-line"><strong>Subclass:</strong> ${escapeHtml(subclassName)}</div>
+      <div class="subclass-line">
+        ${subclassIcon ? `<img class="item-icon" src="${subclassIcon}" alt="" />` : ""}
+        <strong>Subclass:</strong> ${escapeHtml(subclassName)}
+      </div>
       <div class="pill-row"><span class="slot-label">Aspects</span><div class="aspect-fragment-list">${aspectPills || "-"}</div></div>
       <div class="pill-row"><span class="slot-label">Fragments</span><div class="aspect-fragment-list">${fragmentPills || "-"}</div></div>
     </div>`;
