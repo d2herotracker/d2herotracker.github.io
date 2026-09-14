@@ -1,0 +1,8 @@
+# Claude Code project-level settings - regenerates itself and contains
+# absolute local paths, so it must not land in a public repo.
+.claude/
+
+# Windows / network-share cruft
+Thumbs.db
+desktop.ini
+*.lock
