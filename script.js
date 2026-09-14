@@ -242,7 +242,7 @@ async function fetchProfile(membership) {
 
 // Turns raw profile components into a simple per-character loadout object:
 // { className, weapons: {slot: itemHash}, armor: {slot: itemHash},
-//   subclassHash, aspects: [hash...], fragments: [hash...] }
+//   armorMods: [hash...], subclassHash, aspects: [hash...], fragments: [hash...] }
 function buildLoadout(profile, characterId) {
   const character = profile.characters.data[characterId];
   const equipment = profile.characterEquipment.data[characterId].items;
@@ -252,6 +252,7 @@ function buildLoadout(profile, characterId) {
     className: CLASS_NAMES[character.classType] || "Unknown",
     weapons: {},
     armor: {},
+    armorMods: [],
     subclassHash: null,
     aspects: [],
     fragments: [],
@@ -262,6 +263,7 @@ function buildLoadout(profile, characterId) {
       loadout.weapons[WEAPON_BUCKETS[item.bucketHash]] = item.itemHash;
     } else if (ARMOR_BUCKETS[item.bucketHash]) {
       loadout.armor[ARMOR_BUCKETS[item.bucketHash]] = item.itemHash;
+      collectArmorMods(sockets[item.itemInstanceId], loadout.armorMods);
     } else if (item.bucketHash === SUBCLASS_BUCKET) {
       loadout.subclassHash = item.itemHash;
       const socketData = sockets[item.itemInstanceId];
@@ -289,6 +291,19 @@ function classifyPlug(plugHash, loadout) {
   else if (type.endsWith("Fragment")) loadout.fragments.push(plugHash);
 }
 
+// Pushes any equipped "<Slot> Armor Mod" plugs from one armor piece's
+// sockets - this skips shaders, ornaments, and masterwork sockets, which
+// use different itemTypeDisplayName values (e.g. "Shader", "").
+function collectArmorMods(socketData, armorMods) {
+  if (!socketData) return;
+  for (const socket of socketData.sockets) {
+    const def = getItemDef(socket.plugHash);
+    if (def && def.itemTypeDisplayName && def.itemTypeDisplayName.endsWith("Armor Mod")) {
+      armorMods.push(socket.plugHash);
+    }
+  }
+}
+
 // ===================== DIFF DETECTION =====================================
 
 // Compares two loadouts for the same character and returns human-readable
@@ -309,6 +324,10 @@ function diffLoadouts(displayName, prev, curr) {
   }
   if (curr.subclassHash !== prev.subclassHash) {
     changes.push(`${displayName} switched subclass to ${itemName(curr.subclassHash)}`);
+  }
+
+  for (const hash of curr.armorMods) {
+    if (!prev.armorMods.includes(hash)) changes.push(`${displayName} equipped mod ${itemName(hash)}`);
   }
 
   for (const hash of curr.aspects) {
@@ -355,6 +374,7 @@ function renderPill(hash) {
 }
 
 function renderCharacter(characterId, loadout) {
+  const modPills = loadout.armorMods.map(renderPill).join("");
   const aspectPills = loadout.aspects.map(renderPill).join("");
   const fragmentPills = loadout.fragments.map(renderPill).join("");
   const subclassDef = loadout.subclassHash ? getItemDef(loadout.subclassHash) : null;
@@ -372,6 +392,7 @@ function renderCharacter(characterId, loadout) {
       ${renderItemRow("Chest", loadout.armor.Chest)}
       ${renderItemRow("Legs", loadout.armor.Legs)}
       ${renderItemRow("Class", loadout.armor.Class)}
+      <div class="pill-row"><span class="slot-label">Mods</span><div class="aspect-fragment-list">${modPills || "-"}</div></div>
       <div class="subclass-line">
         ${subclassIcon ? `<img class="item-icon" src="${subclassIcon}" alt="" />` : ""}
         <strong>Subclass:</strong> ${escapeHtml(subclassName)}
