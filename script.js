@@ -278,14 +278,15 @@ function buildLoadout(profile, characterId) {
 
 // Sorts a plugged socket into the aspects/fragments list, skipping empty
 // slots and anything that isn't actually an Aspect or Fragment plug.
+// Bungie labels these per-element (e.g. "Solar Aspect", "Void Fragment"),
+// so check the suffix rather than an exact match.
 function classifyPlug(plugHash, loadout) {
   const def = getItemDef(plugHash);
   if (!def || !def.displayProperties || !def.displayProperties.name) return;
-  const name = def.displayProperties.name;
-  if (name.startsWith("Empty")) return;
+  const type = def.itemTypeDisplayName || "";
 
-  if (def.itemTypeDisplayName === "Aspect") loadout.aspects.push(plugHash);
-  else if (def.itemTypeDisplayName === "Fragment") loadout.fragments.push(plugHash);
+  if (type.endsWith("Aspect")) loadout.aspects.push(plugHash);
+  else if (type.endsWith("Fragment")) loadout.fragments.push(plugHash);
 }
 
 // ===================== DIFF DETECTION =====================================
@@ -363,7 +364,8 @@ function renderCharacter(characterId, loadout) {
       ${renderItemRow("Legs", loadout.armor.Legs)}
       ${renderItemRow("Class", loadout.armor.Class)}
       <div class="subclass-line"><strong>Subclass:</strong> ${escapeHtml(subclassName)}</div>
-      <div class="aspect-fragment-list">${aspectPills}${fragmentPills}</div>
+      <div class="pill-row"><span class="slot-label">Aspects</span><div class="aspect-fragment-list">${aspectPills || "-"}</div></div>
+      <div class="pill-row"><span class="slot-label">Fragments</span><div class="aspect-fragment-list">${fragmentPills || "-"}</div></div>
     </div>`;
 }
 
@@ -510,6 +512,15 @@ function initTeammateFinder() {
 
 // ===================== POLL LOOP ==========================================
 
+// dateLastPlayed is an ISO timestamp string, so plain string comparison
+// sorts it correctly - no need to parse it into a Date first.
+function getActiveCharacterId(charactersData) {
+  return Object.keys(charactersData).reduce(
+    (latest, id) => (!latest || charactersData[id].dateLastPlayed > charactersData[latest].dateLastPlayed ? id : latest),
+    null
+  );
+}
+
 async function processMember(member) {
   const displayName = member.displayName;
   try {
@@ -520,19 +531,16 @@ async function processMember(member) {
       throw new Error("Profile is private or has no characters");
     }
 
-    const characterLoadouts = {};
+    // Only show whichever character they last played - not all three.
+    const characterId = getActiveCharacterId(profile.characters.data);
+    const loadout = buildLoadout(profile, characterId);
+
     if (!lastLoadouts[displayName]) lastLoadouts[displayName] = {};
+    const changes = diffLoadouts(displayName, lastLoadouts[displayName][characterId], loadout);
+    pushChanges(changes);
+    lastLoadouts[displayName][characterId] = loadout;
 
-    for (const characterId of Object.keys(profile.characters.data)) {
-      const loadout = buildLoadout(profile, characterId);
-      characterLoadouts[characterId] = loadout;
-
-      const changes = diffLoadouts(displayName, lastLoadouts[displayName][characterId], loadout);
-      pushChanges(changes);
-      lastLoadouts[displayName][characterId] = loadout;
-    }
-
-    renderPlayerCard(displayName, characterLoadouts, null);
+    renderPlayerCard(displayName, { [characterId]: loadout }, null);
   } catch (err) {
     // Isolated per player - one bad profile/rate limit shouldn't stop others.
     console.error(`[d2tracker] ${displayName}:`, err);
