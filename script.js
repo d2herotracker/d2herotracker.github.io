@@ -19,25 +19,23 @@
  *        205 = CharacterEquipment  (itemHash/instanceId per equipped item)
  *        305 = ItemSockets         (plugged sockets, incl. subclass plugs)
  *
- *  - GET  /Destiny2/{membershipType}/Account/{membershipId}/Character/
- *      {characterId}/Stats/Activities/?count=1&mode=0&page=0
- *      Per-character activity history, used by "Auto-detect Teammates" to
- *      find a player's most recent completed/reported activity.
+ *  - GET  /Destiny2/{membershipType}/Profile/{membershipId}/?components=1000
+ *      Component 1000 = ProfileTransitoryComponent, Bungie's live "session"
+ *      data. Its partyMembers[] is the seed player's CURRENT fireteam -
+ *      this is what "Auto-detect Teammates" is built on. It only lists bare
+ *      membershipIds (no name/platform), so each one needs the next call.
  *
- *  - GET  /Destiny2/Stats/PostGameCarnageReport/{instanceId}/
- *      Full report for one activity instance, including an "entries" array
- *      listing every player who was in it - that's how teammates are found.
- *
- *  Both Stats endpoints above are called against stats.bungie.net (see
- *  STATS_API_ROOT), not www.bungie.net - the latter can 30x-redirect Stats
- *  calls to an insecure http:// URL, which browsers block as mixed content.
+ *  - GET  /User/GetMembershipsById/{membershipId}/-1/
+ *      Resolves a bare membershipId (no known platform) to its Bungie Name
+ *      and correct membershipType. The "-1" means "search every platform."
  *
  * All requests require an X-API-Key header from a Bungie application:
  * https://www.bungie.net/en/Application
  *
- * NOTE on "Auto-detect Teammates": this reflects who was in the seed
- * player's last *completed/reported* activity (a PGCR), not their live
- * fireteam right now - Bungie's API has no "who's in my party" endpoint.
+ * NOTE on "Auto-detect Teammates": partyMembers reflects your fireteam at
+ * the moment of the request (Bungie calls this "transitory" data - it can
+ * be a few seconds stale, and is empty if you're not in an activity), so
+ * click "Refresh" to re-check it - it does not update itself between polls.
  * ========================================================================= */
 
 // ===================== CONFIG (edit this section) =======================
@@ -57,11 +55,6 @@ const POLL_INTERVAL_MS = 45 * 1000;
 
 const API_ROOT = "https://www.bungie.net/Platform";
 const ICON_ROOT = "https://www.bungie.net";
-
-// Stats endpoints (activity history, PGCR) live behind www.bungie.net but
-// sometimes 30x-redirect to a plain-http stats.bungie.net, which browsers
-// block as mixed content - call this host directly to avoid that redirect.
-const STATS_API_ROOT = "https://stats.bungie.net/Platform";
 
 // Inventory bucket hashes, used to sort equipped items into slots.
 const WEAPON_BUCKETS = {
@@ -85,15 +78,14 @@ const LS_MANIFEST_VERSION = "d2tracker.manifestVersion";
 const LS_MEMBERSHIP_PREFIX = "d2tracker.membership."; // + displayName
 const LS_SEED_NAME = "d2tracker.seedName"; // last name used to find teammates
 
-// Manifest tables we cache: items (for names/icons) and activities (for the
-// "Found teammates from <activity name>" status message).
-const MANIFEST_TABLES = ["DestinyInventoryItemDefinition", "DestinyActivityDefinition"];
+// Manifest tables we cache - just items, for turning hashes into names/icons.
+const MANIFEST_TABLES = ["DestinyInventoryItemDefinition"];
 
 // ===================== STATE =============================================
 
 // Loaded at startup: tableName -> { hash (number): definition }. Starts as
-// empty tables so lookups are safe even before ensureManifestLoaded() finishes.
-let manifestTables = { DestinyInventoryItemDefinition: {}, DestinyActivityDefinition: {} };
+// an empty table so lookups are safe even before ensureManifestLoaded() finishes.
+let manifestTables = { DestinyInventoryItemDefinition: {} };
 
 // In-memory "last seen" loadout, used only to detect changes between polls.
 // Shape: lastLoadouts[displayName][characterId] = loadoutObject (see below).
@@ -116,9 +108,8 @@ function escapeHtml(str) {
 
 // Wraps fetch() with the API key header and Bungie's envelope error format.
 // Bungie always returns HTTP 200 with an ErrorCode; 1 means success.
-// `root` defaults to the main API but can be overridden (see STATS_API_ROOT).
-async function bungieFetch(path, options = {}, root = API_ROOT) {
-  const response = await fetch(root + path, {
+async function bungieFetch(path, options = {}) {
+  const response = await fetch(API_ROOT + path, {
     ...options,
     headers: { "X-API-Key": BUNGIE_API_KEY, ...options.headers },
   });
@@ -198,12 +189,6 @@ async function ensureManifestLoaded() {
 
 function getItemDef(hash) {
   return manifestTables.DestinyInventoryItemDefinition[hash] || null;
-}
-
-// Used for the "Found teammates from last activity: <name>" status message.
-function getActivityName(activityHash) {
-  const def = manifestTables.DestinyActivityDefinition[activityHash];
-  return def && def.displayProperties ? def.displayProperties.name : "an unknown activity";
 }
 
 function iconUrl(def) {
@@ -412,9 +397,9 @@ function cssEscape(str) {
 }
 
 // ===================== AUTO-DETECT TEAMMATES ==============================
-// Populates ROSTER from a seed player's last reported activity, on top of
+// Populates ROSTER from a seed player's CURRENT live fireteam, on top of
 // the manual list above. Manual entries are never removed, so they still
-// work as a fallback/override if auto-detection finds nothing.
+// work as a fallback/override if auto-detection finds nobody.
 
 function setTeammateStatus(text, isError = false) {
   const el = $("#teammate-status");
@@ -422,51 +407,27 @@ function setTeammateStatus(text, isError = false) {
   el.classList.toggle("error", isError);
 }
 
-// Finds the newest activity instance ID across all of a member's characters.
-// Each character has its own history, so we check them all and keep the
-// most recent by timestamp.
-async function findLatestActivityInstanceId(membership, characterIds) {
-  const requests = characterIds.map((characterId) =>
-    bungieFetch(
-      `/Destiny2/${membership.membershipType}/Account/${membership.membershipId}` +
-        `/Character/${characterId}/Stats/Activities/?count=1&mode=0&page=0`,
-      {},
-      STATS_API_ROOT
-    ).catch(() => null)
-  );
-
-  const results = await Promise.all(requests);
-  let latest = null;
-  for (const result of results) {
-    const activity = result && result.activities && result.activities[0];
-    if (activity && (!latest || new Date(activity.period) > new Date(latest.period))) {
-      latest = activity;
-    }
-  }
-  return latest ? latest.activityDetails.instanceId : null;
+// Reads the live partyMembers[] off component 1000. Each entry is just a
+// bare membershipId - no name or platform - see resolveMembershipFromRawId.
+async function fetchCurrentFireteam(membership) {
+  const path = `/Destiny2/${membership.membershipType}/Profile/${membership.membershipId}/?components=1000`;
+  const profile = await bungieFetch(path);
+  const transitory = profile.profileTransitoryData && profile.profileTransitoryData.data;
+  if (!transitory) throw new Error("Current fireteam data isn't available (private profile)");
+  return transitory.partyMembers || [];
 }
 
-// Pulls every player out of a PostGameCarnageReport's "entries" array.
-function extractTeammatesFromPgcr(pgcr) {
-  const teammates = new Map(); // membershipId -> {membershipId, membershipType, displayName}
+// Turns a bare membershipId from partyMembers[] into a full {membershipId,
+// membershipType, displayName}, since that ID alone isn't enough to poll.
+async function resolveMembershipFromRawId(rawMembershipId) {
+  const result = await bungieFetch(`/User/GetMembershipsById/${rawMembershipId}/-1/`);
+  const match = result.destinyMemberships.find((m) => m.membershipId === rawMembershipId) || result.destinyMemberships[0];
 
-  for (const entry of pgcr.entries) {
-    const info = entry.player && entry.player.destinyUserInfo;
-    if (!info || !info.membershipId) continue;
+  const displayName = match.bungieGlobalDisplayName
+    ? `${match.bungieGlobalDisplayName}#${String(match.bungieGlobalDisplayNameCode).padStart(4, "0")}`
+    : match.displayName;
 
-    // Prefer the modern cross-platform Bungie Name; fall back for older data.
-    const displayName = info.bungieGlobalDisplayName
-      ? `${info.bungieGlobalDisplayName}#${String(info.bungieGlobalDisplayNameCode).padStart(4, "0")}`
-      : info.displayName || `Guardian ${info.membershipId}`;
-
-    teammates.set(info.membershipId, {
-      membershipId: info.membershipId,
-      membershipType: info.membershipType,
-      displayName,
-    });
-  }
-
-  return Array.from(teammates.values());
+  return { membershipId: match.membershipId, membershipType: match.membershipType, displayName };
 }
 
 // Adds newly-found teammates to ROSTER, skipping anyone already tracked
@@ -503,31 +464,28 @@ function mergeIntoRoster(teammates) {
   return added;
 }
 
-// Full flow: seed name -> membership -> latest activity -> PGCR -> roster.
-async function findTeammatesFromActivity(seedName) {
-  setTeammateStatus(`Looking up ${seedName}...`);
+// Full flow: seed name -> membership -> live partyMembers -> resolve each -> roster.
+async function findCurrentFireteam(seedName) {
+  setTeammateStatus(`Looking up ${seedName}'s current fireteam...`);
   try {
     const membership = await resolveMembership(seedName); // reuses existing resolver
-    const profile = await fetchProfile(membership);
-    if (!profile.characters || !profile.characters.data) {
-      throw new Error("Profile is private or has no characters");
+    const partyMembers = await fetchCurrentFireteam(membership);
+    if (!partyMembers.length) {
+      throw new Error("No current fireteam found - they may be offline or not in an activity");
     }
 
-    const characterIds = Object.keys(profile.characters.data);
-    const instanceId = await findLatestActivityInstanceId(membership, characterIds);
-    if (!instanceId) throw new Error("No recent activity history found (profile may be private)");
-
-    const pgcr = await bungieFetch(`/Destiny2/Stats/PostGameCarnageReport/${instanceId}/`, {}, STATS_API_ROOT);
-    const teammates = extractTeammatesFromPgcr(pgcr);
+    const resolved = await Promise.all(
+      partyMembers.map((pm) => resolveMembershipFromRawId(pm.membershipId).catch(() => null))
+    );
+    const teammates = resolved.filter(Boolean);
     const added = mergeIntoRoster(teammates);
-    const activityName = getActivityName(pgcr.activityDetails.referenceId);
 
     localStorage.setItem(LS_SEED_NAME, seedName);
-    setTeammateStatus(`Found ${teammates.length} teammates from last activity (${activityName}) - added ${added} new.`);
+    setTeammateStatus(`Found ${teammates.length} players in current fireteam - added ${added} new.`);
 
     await pollAll(); // show the new cards right away instead of waiting for the next tick
   } catch (err) {
-    console.error("[d2tracker] teammate finder:", err);
+    console.error("[d2tracker] fireteam finder:", err);
     setTeammateStatus(`Error: ${err.message}`, true);
   }
 }
@@ -540,13 +498,13 @@ function initTeammateFinder() {
     event.preventDefault();
     const name = $("#seed-name-input").value.trim();
     if (!name) return setTeammateStatus("Enter a Bungie Name first, e.g. Name#1234.", true);
-    findTeammatesFromActivity(name);
+    findCurrentFireteam(name);
   });
 
   $("#refresh-teammates-btn").addEventListener("click", () => {
     const name = localStorage.getItem(LS_SEED_NAME);
     if (!name) return setTeammateStatus("No saved name yet - use 'Find' first.", true);
-    findTeammatesFromActivity(name);
+    findCurrentFireteam(name);
   });
 }
 
