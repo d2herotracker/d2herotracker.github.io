@@ -40,7 +40,10 @@
 
 // ===================== CONFIG (edit this section) =======================
 
-const BUNGIE_API_KEY = "1467c5e9a32e4ee4ba7c85669025b5e4";
+// The API key is NOT hardcoded here - it's entered once via the page and
+// kept only in this browser's localStorage, so it never lands in git.
+// Get a free key at https://www.bungie.net/en/Application
+let BUNGIE_API_KEY = "";
 
 // Empty by default so nobody is tracked automatically. Add an entry here
 // only for people you want tracked every time the page loads, with no
@@ -74,6 +77,7 @@ const SUBCLASS_BUCKET = 3284755031;
 const CLASS_NAMES = { 0: "Titan", 1: "Hunter", 2: "Warlock" };
 
 // localStorage keys (small data only - big manifest tables go in IndexedDB).
+const LS_API_KEY = "d2tracker.apiKey";
 const LS_MANIFEST_VERSION = "d2tracker.manifestVersion";
 const LS_MEMBERSHIP_PREFIX = "d2tracker.membership."; // + displayName
 const LS_SEED_NAME = "d2tracker.seedName"; // last name used to find teammates
@@ -611,12 +615,11 @@ async function pollAll() {
 
 // ===================== INIT ================================================
 
-async function init() {
-  // An empty ROSTER is a valid setup now (auto-detect-only usage), so only
-  // warn about the API key - that one's required no matter what.
-  if (BUNGIE_API_KEY === "PASTE_MY_KEY_HERE") {
-    $("#config-warning").hidden = false;
-  }
+// Everything below only runs once a key is available - see initApiKeyGate().
+async function startApp() {
+  $("#teammate-finder").hidden = false;
+  $("main").hidden = false;
+  $("#change-key-btn").hidden = false;
 
   initTeammateFinder();
 
@@ -632,4 +635,32 @@ async function init() {
   setInterval(pollAll, POLL_INTERVAL_MS);
 }
 
-init();
+// Shows the "enter your API key" box until one is saved in localStorage,
+// then starts the app. "Change API Key" just clears it and reloads -
+// simpler than trying to reset in-memory state mid-session.
+function initApiKeyGate() {
+  const saved = localStorage.getItem(LS_API_KEY);
+
+  $("#api-key-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const key = $("#api-key-input").value.trim();
+    if (!key) return;
+    localStorage.setItem(LS_API_KEY, key);
+    BUNGIE_API_KEY = key;
+    $("#api-key-section").hidden = true;
+    startApp();
+  });
+
+  $("#change-key-btn").addEventListener("click", () => {
+    localStorage.removeItem(LS_API_KEY);
+    location.reload();
+  });
+
+  if (saved) {
+    BUNGIE_API_KEY = saved;
+    $("#api-key-section").hidden = true;
+    startApp();
+  }
+}
+
+initApiKeyGate();

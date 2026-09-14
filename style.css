@@ -36,6 +36,25 @@ header h1 { margin: 0 0 4px; font-size: 1.5rem; }
   margin-bottom: 16px;
 }
 
+.warning .hint {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+.warning a { color: inherit; }
+
+#change-key-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  margin-top: 6px;
+}
+
 #teammate-finder {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -46,14 +65,16 @@ header h1 { margin: 0 0 4px; font-size: 1.5rem; }
 
 #teammate-finder h2 { margin: 0 0 8px; font-size: 1.05rem; }
 
-#teammate-form {
+#teammate-form,
+#api-key-form {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
-#teammate-form input[type="text"] {
+#teammate-form input[type="text"],
+#api-key-form input[type="password"] {
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text);
@@ -61,7 +82,8 @@ header h1 { margin: 0 0 4px; font-size: 1.5rem; }
   padding: 5px 8px;
 }
 
-#teammate-form button {
+#teammate-form button,
+#api-key-form button {
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text);
@@ -70,7 +92,8 @@ header h1 { margin: 0 0 4px; font-size: 1.5rem; }
   cursor: pointer;
 }
 
-#teammate-form button:hover { border-color: var(--accent); }
+#teammate-form button:hover,
+#api-key-form button:hover { border-color: var(--accent); }
 
 #teammate-status {
   margin: 8px 0 0;

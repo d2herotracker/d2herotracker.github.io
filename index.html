@@ -9,18 +9,26 @@
 <body>
   <header>
     <h1>Destiny 2 Loadout Tracker</h1>
-    <p id="status-line">Loading manifest&hellip;</p>
+    <p id="status-line">Waiting for API key&hellip;</p>
+    <button id="change-key-btn" hidden>Change API Key</button>
   </header>
 
-  <!-- Shown automatically if script.js still has the placeholder API key. -->
-  <div id="config-warning" class="warning" hidden>
-    Set <code>BUNGIE_API_KEY</code> at the top of <code>script.js</code>
-    before this will work. <code>ROSTER</code> can stay empty - use
-    "Auto-detect Teammates" below to track people per-session instead.
+  <!-- Shown until a key is saved to localStorage; hidden (and the app
+       started) once one is found or entered. Keeps the key out of git. -->
+  <div id="api-key-section" class="warning">
+    <form id="api-key-form">
+      <label for="api-key-input">Enter your Bungie API key to start</label>
+      <input type="password" id="api-key-input" placeholder="Bungie API key" autocomplete="off" />
+      <button type="submit">Save</button>
+    </form>
+    <p class="hint">
+      Free key at <a href="https://www.bungie.net/en/Application" target="_blank" rel="noopener">bungie.net/en/Application</a>.
+      Stored only in this browser - never committed to the repo.
+    </p>
   </div>
 
   <!-- Adds players to ROSTER on top of the manual list in script.js. -->
-  <section id="teammate-finder" aria-label="Auto-detect teammates">
+  <section id="teammate-finder" aria-label="Auto-detect teammates" hidden>
     <h2>Auto-detect Teammates</h2>
     <form id="teammate-form">
       <label for="seed-name-input">Find teammates from</label>
@@ -32,7 +40,7 @@
     <p id="teammate-status"></p>
   </section>
 
-  <main>
+  <main hidden>
     <section id="players" aria-label="Player loadout cards"></section>
 
     <aside id="changes-panel" aria-label="Recent changes">
