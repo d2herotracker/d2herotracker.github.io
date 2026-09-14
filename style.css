@@ -157,6 +157,13 @@ main {
   flex-shrink: 0;
 }
 
+.mod-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 4px 66px; /* lines up under the icon, past the slot label */
+}
+
 .subclass-line {
   margin-top: 6px;
   display: flex;

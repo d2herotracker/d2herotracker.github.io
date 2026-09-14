@@ -241,8 +241,9 @@ async function fetchProfile(membership) {
 }
 
 // Turns raw profile components into a simple per-character loadout object:
-// { className, weapons: {slot: itemHash}, armor: {slot: itemHash},
-//   armorMods: [hash...], subclassHash, aspects: [hash...], fragments: [hash...] }
+// { className, weapons: {slot: itemHash}, weaponMods: {slot: [hash...]},
+//   armor: {slot: itemHash}, armorMods: {slot: [hash...]}, subclassHash,
+//   aspects: [hash...], fragments: [hash...] }
 function buildLoadout(profile, characterId) {
   const character = profile.characters.data[characterId];
   const equipment = profile.characterEquipment.data[characterId].items;
@@ -251,8 +252,9 @@ function buildLoadout(profile, characterId) {
   const loadout = {
     className: CLASS_NAMES[character.classType] || "Unknown",
     weapons: {},
+    weaponMods: {},
     armor: {},
-    armorMods: [],
+    armorMods: {},
     subclassHash: null,
     aspects: [],
     fragments: [],
@@ -260,10 +262,13 @@ function buildLoadout(profile, characterId) {
 
   for (const item of equipment) {
     if (WEAPON_BUCKETS[item.bucketHash]) {
-      loadout.weapons[WEAPON_BUCKETS[item.bucketHash]] = item.itemHash;
+      const slot = WEAPON_BUCKETS[item.bucketHash];
+      loadout.weapons[slot] = item.itemHash;
+      loadout.weaponMods[slot] = collectMods(sockets[item.itemInstanceId], "Weapon Mod");
     } else if (ARMOR_BUCKETS[item.bucketHash]) {
-      loadout.armor[ARMOR_BUCKETS[item.bucketHash]] = item.itemHash;
-      collectArmorMods(sockets[item.itemInstanceId], loadout.armorMods);
+      const slot = ARMOR_BUCKETS[item.bucketHash];
+      loadout.armor[slot] = item.itemHash;
+      loadout.armorMods[slot] = collectMods(sockets[item.itemInstanceId], "Armor Mod");
     } else if (item.bucketHash === SUBCLASS_BUCKET) {
       loadout.subclassHash = item.itemHash;
       const socketData = sockets[item.itemInstanceId];
@@ -291,20 +296,36 @@ function classifyPlug(plugHash, loadout) {
   else if (type.endsWith("Fragment")) loadout.fragments.push(plugHash);
 }
 
-// Pushes any equipped "<Slot> Armor Mod" plugs from one armor piece's
-// sockets - this skips shaders, ornaments, and masterwork sockets, which
-// use different itemTypeDisplayName values (e.g. "Shader", "").
-function collectArmorMods(socketData, armorMods) {
-  if (!socketData) return;
+// Finds equipped mod plugs in one item's sockets - `typeSuffix` is
+// "Weapon Mod" or "Armor Mod" (Bungie prefixes these, e.g. "Helmet Armor
+// Mod"). Skips "Empty ... Socket" placeholders, shaders, and ornaments.
+function collectMods(socketData, typeSuffix) {
+  const mods = [];
+  if (!socketData) return mods;
+
   for (const socket of socketData.sockets) {
     const def = getItemDef(socket.plugHash);
-    if (def && def.itemTypeDisplayName && def.itemTypeDisplayName.endsWith("Armor Mod")) {
-      armorMods.push(socket.plugHash);
-    }
+    if (!def || !def.displayProperties || !def.displayProperties.name) continue;
+    if (def.displayProperties.name.startsWith("Empty")) continue;
+    if ((def.itemTypeDisplayName || "").endsWith(typeSuffix)) mods.push(socket.plugHash);
   }
+  return mods;
 }
 
 // ===================== DIFF DETECTION =====================================
+
+// Compares one slot->[hash...] mod map against another (weapons or armor)
+// and appends "X equipped mod Y (slot)" lines for anything newly plugged.
+function diffModSlots(displayName, prevMods, currMods, labelSuffix, changes) {
+  for (const slot of Object.keys(currMods)) {
+    const prevHashes = (prevMods && prevMods[slot]) || [];
+    for (const hash of currMods[slot]) {
+      if (!prevHashes.includes(hash)) {
+        changes.push(`${displayName} equipped mod ${itemName(hash)} (${slot}${labelSuffix})`);
+      }
+    }
+  }
+}
 
 // Compares two loadouts for the same character and returns human-readable
 // change strings, e.g. "Guardian equipped Ace of Spades (Kinetic)".
@@ -326,9 +347,8 @@ function diffLoadouts(displayName, prev, curr) {
     changes.push(`${displayName} switched subclass to ${itemName(curr.subclassHash)}`);
   }
 
-  for (const hash of curr.armorMods) {
-    if (!prev.armorMods.includes(hash)) changes.push(`${displayName} equipped mod ${itemName(hash)}`);
-  }
+  diffModSlots(displayName, prev.weaponMods, curr.weaponMods, "", changes);
+  diffModSlots(displayName, prev.armorMods, curr.armorMods, " armor", changes);
 
   for (const hash of curr.aspects) {
     if (!prev.aspects.includes(hash)) changes.push(`${displayName} equipped aspect ${itemName(hash)}`);
@@ -354,19 +374,24 @@ function pushChanges(changes) {
 
 // ===================== RENDERING ==========================================
 
-function renderItemRow(slotLabel, itemHash) {
+// `modHashes` (optional) renders as a row of small pills right under the
+// item, so each weapon/armor piece shows its own mods instead of one
+// combined list at the bottom.
+function renderItemRow(slotLabel, itemHash, modHashes) {
   if (!itemHash) return `<div class="item-row"><span class="slot-label">${slotLabel}</span>-</div>`;
   const def = getItemDef(itemHash);
   const icon = iconUrl(def);
+  const modPills = (modHashes || []).map(renderPill).join("");
   return `
     <div class="item-row">
       <span class="slot-label">${slotLabel}</span>
       ${icon ? `<img class="item-icon" src="${icon}" alt="" />` : ""}
       <span>${escapeHtml(itemName(itemHash))}</span>
-    </div>`;
+    </div>
+    ${modPills ? `<div class="mod-row">${modPills}</div>` : ""}`;
 }
 
-// Small icon + name pill, shared by aspects and fragments.
+// Small icon + name pill, shared by mods, aspects, and fragments.
 function renderPill(hash) {
   const def = getItemDef(hash);
   const icon = iconUrl(def);
@@ -374,7 +399,6 @@ function renderPill(hash) {
 }
 
 function renderCharacter(characterId, loadout) {
-  const modPills = loadout.armorMods.map(renderPill).join("");
   const aspectPills = loadout.aspects.map(renderPill).join("");
   const fragmentPills = loadout.fragments.map(renderPill).join("");
   const subclassDef = loadout.subclassHash ? getItemDef(loadout.subclassHash) : null;
@@ -384,15 +408,14 @@ function renderCharacter(characterId, loadout) {
   return `
     <div class="character-block">
       <div class="character-title">${loadout.className}</div>
-      ${renderItemRow("Kinetic", loadout.weapons.Kinetic)}
-      ${renderItemRow("Energy", loadout.weapons.Energy)}
-      ${renderItemRow("Power", loadout.weapons.Power)}
-      ${renderItemRow("Helmet", loadout.armor.Helmet)}
-      ${renderItemRow("Arms", loadout.armor.Arms)}
-      ${renderItemRow("Chest", loadout.armor.Chest)}
-      ${renderItemRow("Legs", loadout.armor.Legs)}
-      ${renderItemRow("Class", loadout.armor.Class)}
-      <div class="pill-row"><span class="slot-label">Mods</span><div class="aspect-fragment-list">${modPills || "-"}</div></div>
+      ${renderItemRow("Kinetic", loadout.weapons.Kinetic, loadout.weaponMods.Kinetic)}
+      ${renderItemRow("Energy", loadout.weapons.Energy, loadout.weaponMods.Energy)}
+      ${renderItemRow("Power", loadout.weapons.Power, loadout.weaponMods.Power)}
+      ${renderItemRow("Helmet", loadout.armor.Helmet, loadout.armorMods.Helmet)}
+      ${renderItemRow("Arms", loadout.armor.Arms, loadout.armorMods.Arms)}
+      ${renderItemRow("Chest", loadout.armor.Chest, loadout.armorMods.Chest)}
+      ${renderItemRow("Legs", loadout.armor.Legs, loadout.armorMods.Legs)}
+      ${renderItemRow("Class", loadout.armor.Class, loadout.armorMods.Class)}
       <div class="subclass-line">
         ${subclassIcon ? `<img class="item-icon" src="${subclassIcon}" alt="" />` : ""}
         <strong>Subclass:</strong> ${escapeHtml(subclassName)}
