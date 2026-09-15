@@ -110,8 +110,24 @@ function escapeHtml(str) {
 
 // ===================== BUNGIE API HELPERS ================================
 
+// A Bungie envelope error, carrying its ErrorCode so callers can tell an
+// auth failure apart from anything else.
+class BungieApiError extends Error {
+  constructor(message, errorCode) {
+    super(message);
+    this.name = "BungieApiError";
+    this.errorCode = errorCode;
+  }
+}
+
+// 2101 = ApiInvalidOrExpiredKey, 2102 = ApiKeyMissingFromRequest.
+const API_KEY_ERROR_CODES = new Set([2101, 2102]);
+
 // Wraps fetch() with the API key header and Bungie's envelope error format.
-// Bungie always returns HTTP 200 with an ErrorCode; 1 means success.
+// ErrorCode 1 means success. Bungie sends that same envelope on failures
+// *including with a 5xx status* - a bad API key comes back as HTTP 500 with
+// ErrorCode 2101 - so always read the body before trusting response.status,
+// or the only useful part of the error gets thrown away.
 async function bungieFetch(path, options = {}) {
   const response = await fetch(API_ROOT + path, {
     ...options,
@@ -121,15 +137,32 @@ async function bungieFetch(path, options = {}) {
   if (response.status === 429) {
     throw new Error("Rate limited by Bungie API - will retry next poll");
   }
+
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error(`HTTP ${response.status} calling ${path} (no JSON body)`);
+  }
+
+  if (body.ErrorCode !== 1) {
+    throw new BungieApiError(
+      body.Message || body.ErrorStatus || `HTTP ${response.status} calling ${path}`,
+      body.ErrorCode
+    );
+  }
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} calling ${path}`);
   }
-
-  const body = await response.json();
-  if (body.ErrorCode !== 1) {
-    throw new Error(body.Message || body.ErrorStatus || "Unknown Bungie API error");
-  }
   return body.Response;
+}
+
+// /Destiny2/Manifest/ answers with ANY non-empty key, so a successful
+// manifest load says nothing about whether the key is good - the app would
+// start up fine and only fail on the first real call. /GlobalAlerts/ is the
+// cheapest endpoint that actually validates the key.
+async function validateApiKey() {
+  await bungieFetch("/GlobalAlerts/");
 }
 
 // ===================== MANIFEST CACHE (IndexedDB) ========================
@@ -635,20 +668,55 @@ async function startApp() {
   setInterval(pollAll, POLL_INTERVAL_MS);
 }
 
-// Shows the "enter your API key" box until one is saved in localStorage,
-// then starts the app. "Change API Key" just clears it and reloads -
-// simpler than trying to reset in-memory state mid-session.
+// Shows the "enter your API key" box until a key that Bungie accepts is
+// saved in localStorage, then starts the app. A saved key is re-checked on
+// every load, because a key can be revoked or expire after it was stored.
+// "Change API Key" just clears it and reloads - simpler than trying to
+// reset in-memory state mid-session.
 function initApiKeyGate() {
   const saved = localStorage.getItem(LS_API_KEY);
+
+  function setKeyMessage(message, isError) {
+    const el = $("#api-key-error");
+    el.textContent = message || "";
+    el.classList.toggle("error", Boolean(isError));
+    el.hidden = !message;
+  }
+
+  // Only saves the key once Bungie has confirmed it works, so a bad key
+  // never gets stored and re-used silently on the next load.
+  async function useKey(key) {
+    BUNGIE_API_KEY = key;
+    setKeyMessage("Checking key with Bungie...", false);
+
+    try {
+      await validateApiKey();
+    } catch (err) {
+      console.error("[d2tracker] API key check failed:", err);
+      BUNGIE_API_KEY = "";
+      localStorage.removeItem(LS_API_KEY);
+      $("#api-key-input").value = "";
+      $("#api-key-section").hidden = false;
+      setKeyMessage(
+        API_KEY_ERROR_CODES.has(err.errorCode)
+          ? "Bungie rejected that API key (invalid or expired). Create a new one at bungie.net/en/Application and paste it here."
+          : `Could not verify the key: ${err.message}`,
+        true
+      );
+      return;
+    }
+
+    localStorage.setItem(LS_API_KEY, key);
+    setKeyMessage("", false);
+    $("#api-key-section").hidden = true;
+    startApp();
+  }
 
   $("#api-key-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const key = $("#api-key-input").value.trim();
     if (!key) return;
-    localStorage.setItem(LS_API_KEY, key);
-    BUNGIE_API_KEY = key;
-    $("#api-key-section").hidden = true;
-    startApp();
+    useKey(key);
   });
 
   $("#change-key-btn").addEventListener("click", () => {
@@ -656,11 +724,7 @@ function initApiKeyGate() {
     location.reload();
   });
 
-  if (saved) {
-    BUNGIE_API_KEY = saved;
-    $("#api-key-section").hidden = true;
-    startApp();
-  }
+  if (saved) useKey(saved);
 }
 
 initApiKeyGate();

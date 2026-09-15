@@ -103,6 +103,9 @@ header h1 { margin: 0 0 4px; font-size: 1.5rem; }
 
 #teammate-status.error { color: var(--bad); }
 
+#api-key-error { margin: 0.5rem 0 0; }
+#api-key-error.error { color: var(--bad); }
+
 main {
   display: grid;
   grid-template-columns: 1fr 320px;
