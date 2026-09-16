@@ -321,6 +321,12 @@ function buildLoadout(profile, characterId) {
 
   const loadout = {
     className: CLASS_NAMES[character.classType] || "Unknown",
+    light: character.light || 0,
+    // Component 200 already carries the emblem art, so showing it costs no
+    // extra request: emblemPath is the square icon, emblemBackgroundPath the
+    // wide 474x96 banner used behind the card header.
+    emblemPath: character.emblemBackgroundPath || "",
+    emblemIcon: character.emblemPath || "",
     weapons: {},
     weaponMods: {},
     armor: {},
@@ -477,7 +483,6 @@ function renderCharacter(characterId, loadout) {
 
   return `
     <div class="character-block">
-      <div class="character-title">${loadout.className}</div>
       ${renderItemRow("Kinetic", loadout.weapons.Kinetic, loadout.weaponMods.Kinetic)}
       ${renderItemRow("Energy", loadout.weapons.Energy, loadout.weaponMods.Energy)}
       ${renderItemRow("Power", loadout.weapons.Power, loadout.weaponMods.Power)}
@@ -516,7 +521,25 @@ function renderPlayerCard(displayName, characterLoadouts, error) {
     .map(([characterId, loadout]) => renderCharacter(characterId, loadout))
     .join("");
 
-  card.innerHTML = `<h2>${escapeHtml(displayName)}</h2>${characterHtml}`;
+  // Only the active character is rendered, so its emblem is the card's.
+  const loadout = Object.values(characterLoadouts)[0];
+  card.innerHTML = renderEmblemHeader(displayName, loadout) + characterHtml;
+}
+
+// The in-game emblem banner, with the name and class/power over it. Falls
+// back to a plain heading when a profile gives us no emblem art.
+function renderEmblemHeader(displayName, loadout) {
+  const subtitle = loadout ? `${escapeHtml(loadout.className)}${loadout.light ? ` &middot; ${loadout.light}` : ""}` : "";
+
+  if (!loadout || !loadout.emblemPath) {
+    return `<h2 class="player-name">${escapeHtml(displayName)}<span class="player-sub">${subtitle}</span></h2>`;
+  }
+
+  return `
+    <div class="emblem-header" style="background-image: url('${ICON_ROOT}${encodeURI(loadout.emblemPath)}')">
+      <h2 class="player-name">${escapeHtml(displayName)}</h2>
+      <span class="player-sub">${subtitle}</span>
+    </div>`;
 }
 
 // document.querySelector ids can't contain "#" or spaces, so sanitize it.
@@ -767,6 +790,7 @@ function buildStatsRows(report) {
         ? `${info.bungieGlobalDisplayName}#${String(info.bungieGlobalDisplayNameCode).padStart(4, "0")}`
         : info.displayName || "Unknown",
       membershipId: info.membershipId || "",
+      iconPath: info.iconPath || "",
       className: player.characterClass || "",
       light: player.lightLevel || 0,
       kills: statValue(values, "kills"),
@@ -850,7 +874,9 @@ function renderStatsTable(rows, seedName) {
     .map((row) => {
       const isSeed = seedName && row.displayName.toLowerCase() === seedName.toLowerCase();
       return `<tr${isSeed ? ' class="stats-seed"' : ""}>` +
-        `<td class="stats-name">${escapeHtml(row.displayName)}</td>` +
+        `<td class="stats-name">` +
+        (row.iconPath ? `<img class="stats-emblem" src="${ICON_ROOT}${encodeURI(row.iconPath)}" alt="" />` : "") +
+        `${escapeHtml(row.displayName)}</td>` +
         `<td>${escapeHtml(row.className)}</td>` +
         `<td>${row.light}</td>` +
         `<td>${row.kills}</td>` +

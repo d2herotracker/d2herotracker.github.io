@@ -128,15 +128,59 @@ main {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 12px 14px;
+  padding: 0 0 12px;
+  overflow: hidden; /* keeps the emblem art inside the rounded corners */
 }
 
-.player-card h2 {
-  margin: 0 0 8px;
+/* Bungie's emblem banners are 474x96 with the art on the right, so the text
+   sits left over a gradient that keeps it readable whatever the emblem. */
+.emblem-header {
+  background-size: cover;
+  background-position: center;
+  padding: 10px 14px;
+  min-height: 62px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  position: relative;
+}
+
+.emblem-header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(13, 17, 23, 0.85) 30%, rgba(13, 17, 23, 0.35) 100%);
+}
+
+.emblem-header > * { position: relative; } /* above the gradient */
+
+.player-name {
+  margin: 0;
   font-size: 1.1rem;
+}
+
+.player-sub {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+/* The no-emblem fallback heading still needs the padding the banner supplies. */
+h2.player-name {
+  padding: 12px 14px 0;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.character-block, .player-error { padding: 0 14px; }
+
+.stats-emblem {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 8px;
 }
 
 .player-error {
@@ -154,12 +198,6 @@ main {
 
 .character-block:last-child { margin-bottom: 0; }
 
-.character-title {
-  font-weight: 600;
-  color: var(--accent);
-  margin-bottom: 6px;
-  font-size: 0.9rem;
-}
 
 .item-row {
   display: flex;
