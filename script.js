@@ -1030,16 +1030,17 @@ async function startApp() {
     return;
   }
 
-  const seedName = localStorage.getItem(LS_SEED_NAME);
+  // Restore first so cards appear immediately, then run the same live-first
+  // lookup Find does: current fireteam if they're in an activity, otherwise
+  // whoever was in the last one. Without this a reload would keep showing a
+  // stale roster even after they'd joined a new fireteam.
   const restored = loadSavedRoster();
-  if (restored) {
-    setTeammateStatus(`Showing the last known fireteam (${restored} players) - use Find to refresh.`);
-  } else if (seedName) {
-    // Nothing saved yet, but a seed name is enough to rebuild from history.
-    await fallBackToLastActivity(seedName);
-  }
+  if (restored) setTeammateStatus(`Showing the last known fireteam (${restored} players) - checking for a newer one...`);
 
   await pollAll();
+
+  const seedName = localStorage.getItem(LS_SEED_NAME);
+  if (seedName) await findCurrentFireteam(seedName);
   setInterval(pollAll, POLL_INTERVAL_MS);
 }
 
