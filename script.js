@@ -117,9 +117,11 @@ let manifestTables = { DestinyInventoryItemDefinition: {}, DestinyActivityDefini
 // Intentionally not persisted - a page refresh just starts a fresh baseline.
 const lastLoadouts = {};
 
-// Last activity we pulled a carnage report for, so the poll loop can skip
-// re-fetching the same report every 45 seconds.
-let lastStatsInstanceId = null;
+// The last carnage report we fetched, shared by the stats panel and the
+// fireteam fallback. A finished activity's report never changes, so the same
+// instanceId is never fetched twice.
+let cachedReport = null; // { instanceId, report }
+let renderedStatsInstanceId = null;
 
 // ===================== SMALL DOM HELPERS =================================
 
@@ -648,6 +650,10 @@ function loadSavedRoster() {
 async function findCurrentFireteam(seedName) {
   setTeammateStatus(`Looking up ${seedName}'s current fireteam...`);
   try {
+    // Saved up front: the stats panel keys off this name, and it should
+    // still work when the fireteam lookup below fails (in orbit, private).
+    localStorage.setItem(LS_SEED_NAME, seedName);
+
     const membership = await resolveMembership(seedName); // reuses existing resolver
     const { partyMembers } = await fetchCurrentFireteam(membership);
     if (!partyMembers.length) {
@@ -660,7 +666,6 @@ async function findCurrentFireteam(seedName) {
     const teammates = resolved.filter(Boolean);
     const added = mergeIntoRoster(teammates);
 
-    localStorage.setItem(LS_SEED_NAME, seedName);
     saveRoster();
     setTeammateStatus(`Found ${teammates.length} players in current fireteam - added ${added} new.`);
 
@@ -669,17 +674,35 @@ async function findCurrentFireteam(seedName) {
     // Being in orbit is a normal state, not a failure: keep whatever roster
     // we already have on screen rather than blanking the page.
     if (err instanceof FireteamUnavailableError && err.reason === "not-in-activity") {
-      setTeammateStatus(
-        ROSTER.length
-          ? `Not in an activity right now - showing the last known fireteam (${ROSTER.length} players).`
-          : "Not in an activity right now, and no fireteam saved yet - try Find again once you're in one."
-      );
-      await pollAll();
+      await fallBackToLastActivity(seedName);
       return;
     }
 
     console.error("[d2tracker] fireteam finder:", err);
     setTeammateStatus(`Error: ${err.message}`, true);
+  }
+}
+
+// In orbit there's no live fireteam to read, so rebuild it from whoever was
+// in the last completed activity - the same source the stats panel uses.
+async function fallBackToLastActivity(seedName) {
+  try {
+    const latest = await fetchSeedActivityReport(seedName);
+    if (!latest) {
+      setTeammateStatus("Not in an activity right now, and no completed activities to fall back on.");
+      return;
+    }
+
+    mergeIntoRoster(rosterFromReport(latest.report));
+    saveRoster();
+    setTeammateStatus(
+      `Not in an activity right now - showing the ${ROSTER.length} players from your last activity ` +
+        `(${activityName(latest.report.activityDetails.referenceId)}).`
+    );
+    await pollAll();
+  } catch (err) {
+    console.error("[d2tracker] last-activity fallback:", err);
+    setTeammateStatus(`Not in an activity, and the last one couldn't be read: ${err.message}`, true);
   }
 }
 
@@ -759,6 +782,45 @@ function buildStatsRows(report) {
   return rows.sort((a, b) => b.kills - a.kills);
 }
 
+async function getLastActivityReport(membership, characterId) {
+  const instanceId = await fetchLastActivityId(membership, characterId);
+  if (!instanceId) return null;
+  if (cachedReport && cachedReport.instanceId === instanceId) return cachedReport;
+
+  cachedReport = { instanceId, report: await fetchCarnageReport(instanceId) };
+  return cachedReport;
+}
+
+// A carnage report names every player in that activity and carries the
+// membershipId/membershipType needed to poll them. That makes the fireteam
+// recoverable from the last activity alone - no live fireteam, nothing saved
+// - which is how a player who's sitting in orbit still gets cards.
+function rosterFromReport(report) {
+  return (report.entries || [])
+    .map((entry) => (entry.player && entry.player.destinyUserInfo) || {})
+    .filter((info) => info.membershipId && info.membershipType)
+    .map((info) => ({
+      displayName: info.bungieGlobalDisplayName
+        ? `${info.bungieGlobalDisplayName}#${String(info.bungieGlobalDisplayNameCode).padStart(4, "0")}`
+        : info.displayName || String(info.membershipId),
+      membershipId: info.membershipId,
+      membershipType: info.membershipType,
+    }));
+}
+
+// Seed membership -> active character -> last activity's report. Used both to
+// rebuild the roster and to fill the stats panel.
+async function fetchSeedActivityReport(seedName) {
+  const membership = await resolveMembership(seedName);
+  const profile = await bungieFetch(
+    `/Destiny2/${membership.membershipType}/Profile/${membership.membershipId}/?components=200`
+  );
+  if (!profile.characters || !profile.characters.data) {
+    throw new Error(`${seedName}'s profile is private - no activity history available`);
+  }
+  return getLastActivityReport(membership, getActiveCharacterId(profile.characters.data));
+}
+
 function activityName(referenceId) {
   const def = manifestTables.DestinyActivityDefinition[referenceId];
   return def && def.displayProperties && def.displayProperties.name
@@ -836,24 +898,21 @@ async function refreshStats() {
     }
 
     const characterId = getActiveCharacterId(profile.characters.data);
-    const instanceId = await fetchLastActivityId(membership, characterId);
-    if (!instanceId) {
+    const latest = await getLastActivityReport(membership, characterId);
+    if (!latest) {
       setStatsStatus("No completed activities found for this character yet.");
       return;
     }
 
-    // A finished activity's report never changes, so re-fetching the same
-    // instanceId every 45s would be pure waste.
-    if (instanceId === lastStatsInstanceId) return;
+    // Re-rendering an unchanged report every 45s would just churn the DOM.
+    if (latest.instanceId === renderedStatsInstanceId) return;
 
-    const report = await fetchCarnageReport(instanceId);
-    const rows = buildStatsRows(report);
-
+    const { report } = latest;
     $("#stats-subtitle").textContent =
       `${activityName(report.activityDetails.referenceId)} - finished ${new Date(report.period).toLocaleString()}`;
-    $("#stats-table-wrap").innerHTML = renderStatsTable(rows, seedName);
+    $("#stats-table-wrap").innerHTML = renderStatsTable(buildStatsRows(report), seedName);
     setStatsStatus("");
-    lastStatsInstanceId = instanceId;
+    renderedStatsInstanceId = latest.instanceId;
   } catch (err) {
     console.error("[d2tracker] stats panel:", err);
     setStatsStatus(`Stats unavailable: ${err.message}`, true);
@@ -971,8 +1030,14 @@ async function startApp() {
     return;
   }
 
+  const seedName = localStorage.getItem(LS_SEED_NAME);
   const restored = loadSavedRoster();
-  if (restored) setTeammateStatus(`Showing the last known fireteam (${restored} players) - use Find to refresh.`);
+  if (restored) {
+    setTeammateStatus(`Showing the last known fireteam (${restored} players) - use Find to refresh.`);
+  } else if (seedName) {
+    // Nothing saved yet, but a seed name is enough to rebuild from history.
+    await fallBackToLastActivity(seedName);
+  }
 
   await pollAll();
   setInterval(pollAll, POLL_INTERVAL_MS);
