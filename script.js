@@ -1043,6 +1043,8 @@ async function pollAll() {
 async function startApp() {
   $("#teammate-finder").hidden = false;
   $("main").hidden = false;
+  // Sits outside <main> (below it), so it needs its own reveal.
+  $("#changes-panel").hidden = false;
   $("#change-key-btn").hidden = false;
 
   initTeammateFinder();

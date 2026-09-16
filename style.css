@@ -108,14 +108,24 @@ header h1 { margin: 0 0 4px; font-size: 1.5rem; }
 
 main {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  /* Cards left, fireteam stats right. The stats table is ~10 columns wide,
+     so the right track gets far more room than the old changes feed did;
+     minmax(0, ...) lets the card track actually shrink instead of
+     overflowing on its 300px minimum. */
+  grid-template-columns: minmax(0, 1fr) clamp(380px, 36vw, 580px);
   gap: 16px;
   align-items: start;
 }
 
-/* Stack the changes feed under the cards on narrow screens. */
+/* No stats yet (pre-first-load, or panel hidden) - don't leave a dead
+   column where the table would go. */
+main:has(#stats-panel[hidden]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Stack the stats panel under the cards on narrow screens. */
 @media (max-width: 900px) {
-  main { grid-template-columns: 1fr; }
+  main { grid-template-columns: minmax(0, 1fr); }
 }
 
 #players {
@@ -267,21 +277,29 @@ h2.player-name {
   flex-shrink: 0;
 }
 
+/* Full-width band under <main> rather than a sidebar column. */
 #changes-panel {
+  display: block;
+  margin-top: 16px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px 14px;
-  max-height: 80vh;
+  max-height: 42vh;
   overflow-y: auto;
 }
 
 #changes-panel h2 { margin: 0 0 8px; font-size: 1.05rem; }
 
+/* At full width a single stacked list is a tall thin ribbon, so the
+   entries flow into as many columns as fit. */
 #changes-feed {
   list-style: none;
   margin: 0;
   padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  column-gap: 20px;
 }
 
 #changes-feed li {
@@ -359,7 +377,6 @@ footer p { margin: 0; }
 
 /* ---------- Fireteam stats panel ---------- */
 #stats-panel {
-  margin-top: 16px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -429,6 +446,35 @@ footer p { margin: 0; }
 
 #stats-table tbody tr:last-child td { border-bottom: none; }
 #stats-table tbody tr:hover { background: var(--panel-2); }
+
+/* Sidebar mode: the table shares the row with the loadout cards, so it has
+   ~500px instead of the full page. Drop the 680px floor, tighten the cells,
+   and hide Class and Light - both are already on the player's card sitting
+   directly to the left, so nothing is actually lost. Delete this block to
+   get the full ten columns back (they will scroll sideways). */
+@media (min-width: 901px) {
+  #stats-table {
+    min-width: 0;
+    width: 100%;
+    font-size: 0.8rem;
+  }
+
+  #stats-table th,
+  #stats-table td { padding: 5px 7px; }
+
+  #stats-table th:first-child,
+  #stats-table td:first-child { padding-left: 0; }
+
+  #stats-table th:last-child,
+  #stats-table td:last-child { padding-right: 0; }
+
+  /* 2 = Class, 3 = Light. nth-child still counts hidden cells, so the
+     numeric right-align rule above keeps pointing at the right columns. */
+  #stats-table th:nth-child(2), #stats-table td:nth-child(2),
+  #stats-table th:nth-child(3), #stats-table td:nth-child(3) {
+    display: none;
+  }
+}
 
 .stats-name { font-weight: 600; }
 

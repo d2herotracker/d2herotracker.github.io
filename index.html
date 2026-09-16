@@ -52,27 +52,27 @@
   <main hidden>
     <section id="players" aria-label="Player loadout cards"></section>
 
-    <aside id="changes-panel" aria-label="Recent changes">
-      <h2>Recent Changes</h2>
-      <ul id="changes-feed"></ul>
-    </aside>
+    <!-- Post-game stats for the fireteam's last COMPLETED activity. Bungie
+         has no live per-player K/D/A, so this can never be the activity in
+         progress - see the FIRETEAM STATS section in script.js. -->
+    <section id="stats-panel" aria-label="Fireteam stats" hidden>
+      <div id="stats-header">
+        <h2>Fireteam Stats</h2>
+        <span id="stats-live"></span>
+        <button type="button" id="stats-toggle" aria-expanded="true">Hide</button>
+      </div>
+      <div id="stats-body">
+        <p id="stats-subtitle"></p>
+        <div id="stats-table-wrap"></div>
+        <p id="stats-status" hidden></p>
+      </div>
+    </section>
   </main>
 
-  <!-- Post-game stats for the fireteam's last COMPLETED activity. Bungie
-       has no live per-player K/D/A, so this can never be the activity in
-       progress - see the FIRETEAM STATS section in script.js. -->
-  <section id="stats-panel" aria-label="Fireteam stats" hidden>
-    <div id="stats-header">
-      <h2>Fireteam Stats</h2>
-      <span id="stats-live"></span>
-      <button type="button" id="stats-toggle" aria-expanded="true">Hide</button>
-    </div>
-    <div id="stats-body">
-      <p id="stats-subtitle"></p>
-      <div id="stats-table-wrap"></div>
-      <p id="stats-status" hidden></p>
-    </div>
-  </section>
+  <aside id="changes-panel" aria-label="Recent changes" hidden>
+    <h2>Recent Changes</h2>
+    <ul id="changes-feed"></ul>
+  </aside>
 
   <footer>
     <p>
