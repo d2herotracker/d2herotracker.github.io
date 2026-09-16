@@ -302,6 +302,25 @@ footer {
   margin-top: 20px;
   color: var(--text-dim);
   font-size: 0.8rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap; /* the credit drops below the notice on narrow screens */
+}
+
+footer p { margin: 0; }
+
+.credit {
+  margin-left: auto; /* holds the corner even when the notice wraps */
+  white-space: nowrap;
+}
+
+/* Lighter than the title it trails, so the app name still reads first. */
+.byline {
+  color: var(--text-dim);
+  font-size: 0.75em;
+  font-weight: 500;
 }
 
 /* ---------- Header controls / page zoom ---------- */
