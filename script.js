@@ -82,12 +82,18 @@ const SUBCLASS_BUCKET = 3284755031;
 
 const CLASS_NAMES = { 0: "Titan", 1: "Hunter", 2: "Warlock" };
 
+// profileTransitoryData.privacy: 1 = Public, 2 = Private. A public profile
+// that simply isn't in an activity omits .data entirely, which is NOT the
+// same thing as being private - see fetchCurrentFireteam.
+const PRIVACY_PRIVATE = 2;
+
 // localStorage keys (small data only - big manifest tables go in IndexedDB).
 const LS_API_KEY = "d2tracker.apiKey";
 const LS_MANIFEST_VERSION = "d2tracker.manifestVersion";
 const LS_MEMBERSHIP_PREFIX = "d2tracker.membership."; // + displayName
 const LS_SEED_NAME = "d2tracker.seedName"; // last name used to find teammates
 const LS_ZOOM = "d2tracker.zoom"; // page zoom percentage
+const LS_ROSTER = "d2tracker.roster"; // last auto-detected fireteam
 const LS_STATS_COLLAPSED = "d2tracker.statsCollapsed";
 
 // Manifest tables we cache: items turn hashes into names/icons, activities
@@ -521,6 +527,17 @@ function cssEscape(str) {
 // the manual list above. Manual entries are never removed, so they still
 // work as a fallback/override if auto-detection finds nobody.
 
+// Raised when component 1000 has no fireteam to report. `reason` separates
+// the two causes, because one is worth showing as an error and the other is
+// just "they're in orbit".
+class FireteamUnavailableError extends Error {
+  constructor(message, reason) {
+    super(message);
+    this.name = "FireteamUnavailableError";
+    this.reason = reason;
+  }
+}
+
 function setTeammateStatus(text, isError = false) {
   const el = $("#teammate-status");
   el.textContent = text;
@@ -533,8 +550,21 @@ function setTeammateStatus(text, isError = false) {
 async function fetchCurrentFireteam(membership) {
   const path = `/Destiny2/${membership.membershipType}/Profile/${membership.membershipId}/?components=1000`;
   const profile = await bungieFetch(path);
-  const transitory = profile.profileTransitoryData && profile.profileTransitoryData.data;
-  if (!transitory) throw new Error("Current fireteam data isn't available (private profile)");
+  const component = profile.profileTransitoryData;
+  const transitory = component && component.data;
+
+  if (!transitory) {
+    // Being out of an activity and being private look identical at the
+    // .data level - only the privacy flag tells them apart, and calling a
+    // public profile "private" sends people off fixing the wrong thing.
+    throw new FireteamUnavailableError(
+      component && component.privacy === PRIVACY_PRIVATE
+        ? "That profile's privacy settings hide its fireteam"
+        : "Not in an activity right now",
+      component && component.privacy === PRIVACY_PRIVATE ? "private" : "not-in-activity"
+    );
+  }
+
   return {
     partyMembers: transitory.partyMembers || [],
     currentActivity: transitory.currentActivity || null,
@@ -588,6 +618,32 @@ function mergeIntoRoster(teammates) {
   return added;
 }
 
+// The roster is otherwise memory-only, so a reload while out of an activity
+// would leave nothing to show - Find is the only thing that fills it, and
+// Find needs a live fireteam. Persisting it keeps the last known fireteam's
+// cards on screen between sessions.
+function saveRoster() {
+  const saved = ROSTER.filter((member) => member.membershipId).map(
+    ({ displayName, membershipId, membershipType }) => ({ displayName, membershipId, membershipType })
+  );
+  localStorage.setItem(LS_ROSTER, JSON.stringify(saved));
+}
+
+function loadSavedRoster() {
+  const raw = localStorage.getItem(LS_ROSTER);
+  if (!raw) return 0;
+
+  try {
+    const saved = JSON.parse(raw);
+    return Array.isArray(saved) ? mergeIntoRoster(saved) : 0;
+  } catch (err) {
+    // A corrupt entry must not wedge startup - drop it and carry on empty.
+    console.error("[d2tracker] saved roster unreadable, discarding:", err);
+    localStorage.removeItem(LS_ROSTER);
+    return 0;
+  }
+}
+
 // Full flow: seed name -> membership -> live partyMembers -> resolve each -> roster.
 async function findCurrentFireteam(seedName) {
   setTeammateStatus(`Looking up ${seedName}'s current fireteam...`);
@@ -605,10 +661,23 @@ async function findCurrentFireteam(seedName) {
     const added = mergeIntoRoster(teammates);
 
     localStorage.setItem(LS_SEED_NAME, seedName);
+    saveRoster();
     setTeammateStatus(`Found ${teammates.length} players in current fireteam - added ${added} new.`);
 
     await pollAll(); // show the new cards right away instead of waiting for the next tick
   } catch (err) {
+    // Being in orbit is a normal state, not a failure: keep whatever roster
+    // we already have on screen rather than blanking the page.
+    if (err instanceof FireteamUnavailableError && err.reason === "not-in-activity") {
+      setTeammateStatus(
+        ROSTER.length
+          ? `Not in an activity right now - showing the last known fireteam (${ROSTER.length} players).`
+          : "Not in an activity right now, and no fireteam saved yet - try Find again once you're in one."
+      );
+      await pollAll();
+      return;
+    }
+
     console.error("[d2tracker] fireteam finder:", err);
     setTeammateStatus(`Error: ${err.message}`, true);
   }
@@ -901,6 +970,9 @@ async function startApp() {
     $("#status-line").textContent = "Failed to load Destiny manifest - see console";
     return;
   }
+
+  const restored = loadSavedRoster();
+  if (restored) setTeammateStatus(`Showing the last known fireteam (${restored} players) - use Find to refresh.`);
 
   await pollAll();
   setInterval(pollAll, POLL_INTERVAL_MS);
