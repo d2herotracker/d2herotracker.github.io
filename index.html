@@ -10,7 +10,15 @@
   <header>
     <h1>Destiny 2 Loadout Tracker</h1>
     <p id="status-line">Waiting for API key&hellip;</p>
-    <button id="change-key-btn" hidden>Change API Key</button>
+    <div id="header-controls">
+      <button id="change-key-btn" hidden>Change API Key</button>
+      <div id="zoom-controls" aria-label="Page zoom">
+        <button type="button" id="zoom-out" title="Zoom out">&minus;</button>
+        <span id="zoom-level">100%</span>
+        <button type="button" id="zoom-in" title="Zoom in">+</button>
+        <button type="button" id="zoom-reset" title="Reset zoom to 100%">Reset</button>
+      </div>
+    </div>
   </header>
 
   <!-- Shown until a key is saved to localStorage; hidden (and the app
@@ -49,6 +57,22 @@
       <ul id="changes-feed"></ul>
     </aside>
   </main>
+
+  <!-- Post-game stats for the fireteam's last COMPLETED activity. Bungie
+       has no live per-player K/D/A, so this can never be the activity in
+       progress - see the FIRETEAM STATS section in script.js. -->
+  <section id="stats-panel" aria-label="Fireteam stats" hidden>
+    <div id="stats-header">
+      <h2>Fireteam Stats</h2>
+      <span id="stats-live"></span>
+      <button type="button" id="stats-toggle" aria-expanded="true">Hide</button>
+    </div>
+    <div id="stats-body">
+      <p id="stats-subtitle"></p>
+      <div id="stats-table-wrap"></div>
+      <p id="stats-status" hidden></p>
+    </div>
+  </section>
 
   <footer>
     <p>

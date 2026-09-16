@@ -59,6 +59,12 @@ const POLL_INTERVAL_MS = 45 * 1000;
 const API_ROOT = "https://www.bungie.net/Platform";
 const ICON_ROOT = "https://www.bungie.net";
 
+// Anything in the Stats group (activity history, PGCR) must go through
+// stats.bungie.net directly. Via www.bungie.net those endpoints sometimes
+// 30x-redirect to a plain http://stats.bungie.net URL, which a browser on
+// an HTTPS page refuses to follow - it surfaces as a bare "Failed to fetch".
+const STATS_ROOT = "https://stats.bungie.net/Platform";
+
 // Inventory bucket hashes, used to sort equipped items into slots.
 const WEAPON_BUCKETS = {
   1498876634: "Kinetic",
@@ -81,20 +87,33 @@ const LS_API_KEY = "d2tracker.apiKey";
 const LS_MANIFEST_VERSION = "d2tracker.manifestVersion";
 const LS_MEMBERSHIP_PREFIX = "d2tracker.membership."; // + displayName
 const LS_SEED_NAME = "d2tracker.seedName"; // last name used to find teammates
+const LS_ZOOM = "d2tracker.zoom"; // page zoom percentage
+const LS_STATS_COLLAPSED = "d2tracker.statsCollapsed";
 
-// Manifest tables we cache - just items, for turning hashes into names/icons.
-const MANIFEST_TABLES = ["DestinyInventoryItemDefinition"];
+// Manifest tables we cache: items turn hashes into names/icons, activities
+// turn a PGCR's referenceId into "Salvation's Edge" instead of a number.
+const MANIFEST_TABLES = ["DestinyInventoryItemDefinition", "DestinyActivityDefinition"];
+
+// Page zoom, applied as the CSS `zoom` property (it reflows, unlike
+// transform: scale, which would leave the page overflowing its scrollbars).
+const ZOOM_MIN = 50;
+const ZOOM_MAX = 150;
+const ZOOM_STEP = 10;
 
 // ===================== STATE =============================================
 
 // Loaded at startup: tableName -> { hash (number): definition }. Starts as
 // an empty table so lookups are safe even before ensureManifestLoaded() finishes.
-let manifestTables = { DestinyInventoryItemDefinition: {} };
+let manifestTables = { DestinyInventoryItemDefinition: {}, DestinyActivityDefinition: {} };
 
 // In-memory "last seen" loadout, used only to detect changes between polls.
 // Shape: lastLoadouts[displayName][characterId] = loadoutObject (see below).
 // Intentionally not persisted - a page refresh just starts a fresh baseline.
 const lastLoadouts = {};
+
+// Last activity we pulled a carnage report for, so the poll loop can skip
+// re-fetching the same report every 45 seconds.
+let lastStatsInstanceId = null;
 
 // ===================== SMALL DOM HELPERS =================================
 
@@ -134,9 +153,10 @@ const ORIGIN_MISMATCH_ERROR_CODE = 2107;
 // ErrorCode 2101 - so always read the body before trusting response.status,
 // or the only useful part of the error gets thrown away.
 async function bungieFetch(path, options = {}) {
-  const response = await fetch(API_ROOT + path, {
-    ...options,
-    headers: { "X-API-Key": BUNGIE_API_KEY, ...options.headers },
+  const { root = API_ROOT, ...fetchOptions } = options;
+  const response = await fetch(root + path, {
+    ...fetchOptions,
+    headers: { "X-API-Key": BUNGIE_API_KEY, ...fetchOptions.headers },
   });
 
   if (response.status === 429) {
@@ -507,14 +527,18 @@ function setTeammateStatus(text, isError = false) {
   el.classList.toggle("error", isError);
 }
 
-// Reads the live partyMembers[] off component 1000. Each entry is just a
-// bare membershipId - no name or platform - see resolveMembershipFromRawId.
+// Reads component 1000, which carries both the live partyMembers[] and the
+// activity they're in right now. Each party entry is just a bare
+// membershipId - no name or platform - see resolveMembershipFromRawId.
 async function fetchCurrentFireteam(membership) {
   const path = `/Destiny2/${membership.membershipType}/Profile/${membership.membershipId}/?components=1000`;
   const profile = await bungieFetch(path);
   const transitory = profile.profileTransitoryData && profile.profileTransitoryData.data;
   if (!transitory) throw new Error("Current fireteam data isn't available (private profile)");
-  return transitory.partyMembers || [];
+  return {
+    partyMembers: transitory.partyMembers || [],
+    currentActivity: transitory.currentActivity || null,
+  };
 }
 
 // Turns a bare membershipId from partyMembers[] into a full {membershipId,
@@ -569,7 +593,7 @@ async function findCurrentFireteam(seedName) {
   setTeammateStatus(`Looking up ${seedName}'s current fireteam...`);
   try {
     const membership = await resolveMembership(seedName); // reuses existing resolver
-    const partyMembers = await fetchCurrentFireteam(membership);
+    const { partyMembers } = await fetchCurrentFireteam(membership);
     if (!partyMembers.length) {
       throw new Error("No current fireteam found - they may be offline or not in an activity");
     }
@@ -605,6 +629,212 @@ function initTeammateFinder() {
     const name = localStorage.getItem(LS_SEED_NAME);
     if (!name) return setTeammateStatus("No saved name yet - use 'Find' first.", true);
     findCurrentFireteam(name);
+  });
+}
+
+// ===================== FIRETEAM STATS (POST-GAME) =========================
+// Bungie exposes NO live per-player kills/deaths/assists - component 1000's
+// currentActivity carries only score and player count. Per-player numbers
+// exist solely in the post-game carnage report, which isn't written until
+// the activity ends. So this panel shows the last COMPLETED activity, with
+// a header line for whatever the fireteam is in right now.
+
+// Most recent activity for a character. mode=0 means "any activity type".
+async function fetchLastActivityId(membership, characterId) {
+  const path =
+    `/Destiny2/${membership.membershipType}/Account/${membership.membershipId}` +
+    `/Character/${characterId}/Stats/Activities/?count=1&mode=0&page=0`;
+  const history = await bungieFetch(path, { root: STATS_ROOT });
+  const activities = history.activities || [];
+  return activities.length ? activities[0].activityDetails.instanceId : null;
+}
+
+async function fetchCarnageReport(instanceId) {
+  return bungieFetch(`/Destiny2/Stats/PostGameCarnageReport/${instanceId}/`, { root: STATS_ROOT });
+}
+
+// Every stat lives at values[name].basic.value; a missing entry reads as 0
+// rather than throwing, since not every mode reports every stat.
+function statValue(values, name) {
+  const stat = values && values[name];
+  return stat && stat.basic ? stat.basic.value : 0;
+}
+
+// Turns a carnage report into one plain row per fireteam member, highest
+// kills first. Pure function of the report - kept separate from rendering so
+// it can be tested against a real saved PGCR with no network and no DOM.
+function buildStatsRows(report) {
+  const rows = (report.entries || []).map((entry) => {
+    const player = entry.player || {};
+    const info = player.destinyUserInfo || {};
+    const values = entry.values || {};
+    const timePlayed = values.timePlayedSeconds && values.timePlayedSeconds.basic;
+
+    return {
+      displayName: info.bungieGlobalDisplayName
+        ? `${info.bungieGlobalDisplayName}#${String(info.bungieGlobalDisplayNameCode).padStart(4, "0")}`
+        : info.displayName || "Unknown",
+      membershipId: info.membershipId || "",
+      className: player.characterClass || "",
+      light: player.lightLevel || 0,
+      kills: statValue(values, "kills"),
+      deaths: statValue(values, "deaths"),
+      assists: statValue(values, "assists"),
+      kd: statValue(values, "killsDeathsRatio"),
+      kda: statValue(values, "killsDeathsAssists"),
+      timePlayed: timePlayed ? timePlayed.displayValue : "",
+      completed: statValue(values, "completed") === 1,
+    };
+  });
+
+  return rows.sort((a, b) => b.kills - a.kills);
+}
+
+function activityName(referenceId) {
+  const def = manifestTables.DestinyActivityDefinition[referenceId];
+  return def && def.displayProperties && def.displayProperties.name
+    ? def.displayProperties.name
+    : "Unknown activity";
+}
+
+// currentActivity has a startTime but no activity hash, so the live line can
+// report elapsed time and headcount - never what they're actually playing.
+function describeLiveActivity(currentActivity) {
+  if (!currentActivity || !currentActivity.startTime) return "Not in an activity right now.";
+
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(currentActivity.startTime).getTime()) / 60000));
+  const elapsed = minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
+  const parts = [`In an activity - started ${elapsed} ago`];
+  if (currentActivity.numberOfPlayers) parts.push(`${currentActivity.numberOfPlayers} players`);
+  if (currentActivity.score) parts.push(`score ${currentActivity.score.toLocaleString()}`);
+  return parts.join(" \u00b7 ");
+}
+
+const STATS_COLUMNS = ["Player", "Class", "Light", "Kills", "Deaths", "Assists", "K/D", "KDA", "Time", "Done"];
+
+function renderStatsTable(rows, seedName) {
+  const header = STATS_COLUMNS.map((label) => `<th>${label}</th>`).join("");
+
+  const body = rows
+    .map((row) => {
+      const isSeed = seedName && row.displayName.toLowerCase() === seedName.toLowerCase();
+      return `<tr${isSeed ? ' class="stats-seed"' : ""}>` +
+        `<td class="stats-name">${escapeHtml(row.displayName)}</td>` +
+        `<td>${escapeHtml(row.className)}</td>` +
+        `<td>${row.light}</td>` +
+        `<td class="stats-num">${row.kills}</td>` +
+        `<td class="stats-num">${row.deaths}</td>` +
+        `<td class="stats-num">${row.assists}</td>` +
+        `<td class="stats-num">${row.kd.toFixed(2)}</td>` +
+        `<td class="stats-num">${row.kda.toFixed(2)}</td>` +
+        `<td>${escapeHtml(row.timePlayed)}</td>` +
+        `<td>${row.completed ? '<span class="stats-done">Yes</span>' : "No"}</td>` +
+        `</tr>`;
+    })
+    .join("");
+
+  return `<table id="stats-table"><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function setStatsStatus(text, isError = false) {
+  const el = $("#stats-status");
+  el.textContent = text || "";
+  el.classList.toggle("error", isError);
+  el.hidden = !text;
+}
+
+// Pulls the panel's data. Isolated in its own try/catch (like processMember)
+// so a stats failure never blanks the loadout cards.
+async function refreshStats() {
+  const seedName = localStorage.getItem(LS_SEED_NAME);
+  if (!seedName) return;
+
+  $("#stats-panel").hidden = false;
+
+  try {
+    const membership = await resolveMembership(seedName);
+
+    // One profile call covers both halves: characters (to find whichever one
+    // they last played) and the live activity for the header line.
+    const profile = await bungieFetch(
+      `/Destiny2/${membership.membershipType}/Profile/${membership.membershipId}/?components=200,1000`
+    );
+    const transitory = profile.profileTransitoryData && profile.profileTransitoryData.data;
+    $("#stats-live").textContent = describeLiveActivity(transitory && transitory.currentActivity);
+
+    if (!profile.characters || !profile.characters.data) {
+      throw new Error(`${seedName}'s profile is private - no activity history available`);
+    }
+
+    const characterId = getActiveCharacterId(profile.characters.data);
+    const instanceId = await fetchLastActivityId(membership, characterId);
+    if (!instanceId) {
+      setStatsStatus("No completed activities found for this character yet.");
+      return;
+    }
+
+    // A finished activity's report never changes, so re-fetching the same
+    // instanceId every 45s would be pure waste.
+    if (instanceId === lastStatsInstanceId) return;
+
+    const report = await fetchCarnageReport(instanceId);
+    const rows = buildStatsRows(report);
+
+    $("#stats-subtitle").textContent =
+      `${activityName(report.activityDetails.referenceId)} - finished ${new Date(report.period).toLocaleString()}`;
+    $("#stats-table-wrap").innerHTML = renderStatsTable(rows, seedName);
+    setStatsStatus("");
+    lastStatsInstanceId = instanceId;
+  } catch (err) {
+    console.error("[d2tracker] stats panel:", err);
+    setStatsStatus(`Stats unavailable: ${err.message}`, true);
+  }
+}
+
+function initStatsPanel() {
+  const body = $("#stats-body");
+  const toggle = $("#stats-toggle");
+
+  function applyCollapsed(collapsed) {
+    body.hidden = collapsed;
+    toggle.textContent = collapsed ? "Show" : "Hide";
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+  }
+
+  applyCollapsed(localStorage.getItem(LS_STATS_COLLAPSED) === "true");
+
+  toggle.addEventListener("click", () => {
+    const collapsed = !body.hidden;
+    localStorage.setItem(LS_STATS_COLLAPSED, String(collapsed));
+    applyCollapsed(collapsed);
+  });
+}
+
+// ===================== PAGE ZOOM ==========================================
+// Scales the whole page so a six-person fireteam fits on one screen. Uses the
+// CSS `zoom` property because it reflows the layout; transform: scale would
+// leave the page overflowing its own scrollbars. Native Ctrl+scroll browser
+// zoom is deliberately left alone.
+
+function applyZoom(percent) {
+  const clamped = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, percent));
+  document.body.style.zoom = `${clamped}%`;
+  $("#zoom-level").textContent = `${clamped}%`;
+  localStorage.setItem(LS_ZOOM, String(clamped));
+  return clamped;
+}
+
+function initZoomControls() {
+  let current = applyZoom(Number(localStorage.getItem(LS_ZOOM)) || 100);
+
+  $("#zoom-out").addEventListener("click", () => {
+    current = applyZoom(current - ZOOM_STEP);
+  });
+  $("#zoom-in").addEventListener("click", () => {
+    current = applyZoom(current + ZOOM_STEP);
+  });
+  $("#zoom-reset").addEventListener("click", () => {
+    current = applyZoom(100);
   });
 }
 
@@ -648,7 +878,9 @@ async function processMember(member) {
 
 async function pollAll() {
   $("#status-line").textContent = `Last updated ${new Date().toLocaleTimeString()}`;
-  await Promise.allSettled(ROSTER.map(processMember));
+  // Stats ride along with the player cards - allSettled keeps one failing
+  // half from taking down the other.
+  await Promise.allSettled([...ROSTER.map(processMember), refreshStats()]);
 }
 
 // ===================== INIT ================================================
@@ -660,6 +892,7 @@ async function startApp() {
   $("#change-key-btn").hidden = false;
 
   initTeammateFinder();
+  initStatsPanel();
 
   try {
     await ensureManifestLoaded();
@@ -754,4 +987,7 @@ function initApiKeyGate() {
   if (saved) useKey(saved);
 }
 
+// Zoom is pure DOM, so it works before a key is entered - unlike everything
+// in startApp(), which needs the API.
+initZoomControls();
 initApiKeyGate();
