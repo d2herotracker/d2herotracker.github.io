@@ -336,8 +336,13 @@ footer {
 /* Narrow screens scroll the table sideways instead of the whole page. */
 #stats-table-wrap { overflow-x: auto; }
 
+/* Sized to its contents rather than the viewport - at 100% width the
+   columns spread across a wide monitor and each number drifts far away
+   from the header it belongs to. */
 #stats-table {
-  width: 100%;
+  width: auto;
+  min-width: 680px;
+  max-width: 100%;
   border-collapse: collapse;
   font-size: 0.88rem;
   white-space: nowrap;
@@ -345,27 +350,30 @@ footer {
 
 #stats-table th {
   text-align: left;
-  padding: 6px 10px;
+  padding: 6px 14px;
   border-bottom: 1px solid var(--border);
   color: var(--text-dim);
   font-weight: 600;
 }
 
 #stats-table td {
-  padding: 6px 10px;
+  padding: 6px 14px;
   border-bottom: 1px solid var(--panel-2);
+}
+
+/* Columns 3-8 (Light, Kills, Deaths, Assists, K/D, KDA) are numeric.
+   Aligning header and cell by column position keeps them on the same edge -
+   two separate rules would be free to drift apart. */
+#stats-table th:nth-child(n + 3):nth-child(-n + 8),
+#stats-table td:nth-child(n + 3):nth-child(-n + 8) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 #stats-table tbody tr:last-child td { border-bottom: none; }
 #stats-table tbody tr:hover { background: var(--panel-2); }
 
 .stats-name { font-weight: 600; }
-
-/* Numbers line up column-wise regardless of digit width. */
-.stats-num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
 
 .stats-seed td {
   background: rgba(91, 155, 213, 0.12);

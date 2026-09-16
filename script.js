@@ -722,11 +722,11 @@ function renderStatsTable(rows, seedName) {
         `<td class="stats-name">${escapeHtml(row.displayName)}</td>` +
         `<td>${escapeHtml(row.className)}</td>` +
         `<td>${row.light}</td>` +
-        `<td class="stats-num">${row.kills}</td>` +
-        `<td class="stats-num">${row.deaths}</td>` +
-        `<td class="stats-num">${row.assists}</td>` +
-        `<td class="stats-num">${row.kd.toFixed(2)}</td>` +
-        `<td class="stats-num">${row.kda.toFixed(2)}</td>` +
+        `<td>${row.kills}</td>` +
+        `<td>${row.deaths}</td>` +
+        `<td>${row.assists}</td>` +
+        `<td>${row.kd.toFixed(2)}</td>` +
+        `<td>${row.kda.toFixed(2)}</td>` +
         `<td>${escapeHtml(row.timePlayed)}</td>` +
         `<td>${row.completed ? '<span class="stats-done">Yes</span>' : "No"}</td>` +
         `</tr>`;
