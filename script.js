@@ -123,6 +123,11 @@ class BungieApiError extends Error {
 // 2101 = ApiInvalidOrExpiredKey, 2102 = ApiKeyMissingFromRequest.
 const API_KEY_ERROR_CODES = new Set([2101, 2102]);
 
+// 2107 = OriginHeaderDoesNotMatchKey. Nothing wrong with the key itself -
+// the browser's Origin header doesn't match the "Origin Header" field on
+// the Bungie application, so the same key would work fine from elsewhere.
+const ORIGIN_MISMATCH_ERROR_CODE = 2107;
+
 // Wraps fetch() with the API key header and Bungie's envelope error format.
 // ErrorCode 1 means success. Bungie sends that same envelope on failures
 // *including with a 5xx status* - a bad API key comes back as HTTP 500 with
@@ -685,6 +690,30 @@ function initApiKeyGate() {
 
   // Only saves the key once Bungie has confirmed it works, so a bad key
   // never gets stored and re-used silently on the next load.
+  // Only an actually-bad key is worth throwing away - an origin mismatch or
+  // an outage means the key is fine and re-pasting it would fix nothing, so
+  // keep it and let a reload retry once the app settings are corrected.
+  function explainKeyFailure(err) {
+    if (API_KEY_ERROR_CODES.has(err.errorCode)) {
+      return {
+        discardKey: true,
+        message:
+          "Bungie rejected that API key (invalid or expired). Create a new one at bungie.net/en/Application and paste it here.",
+      };
+    }
+    if (err.errorCode === ORIGIN_MISMATCH_ERROR_CODE) {
+      return {
+        discardKey: false,
+        message:
+          `The key is valid, but Bungie is blocking requests from this page. Open your app at ` +
+          `bungie.net/en/Application and set its "Origin Header" field to exactly ${location.origin} ` +
+          `(or * to allow any origin), then reload. Note it must be the page's origin, not the ` +
+          `"Website" field.`,
+      };
+    }
+    return { discardKey: false, message: `Could not verify the key: ${err.message}` };
+  }
+
   async function useKey(key) {
     BUNGIE_API_KEY = key;
     setKeyMessage("Checking key with Bungie...", false);
@@ -693,16 +722,14 @@ function initApiKeyGate() {
       await validateApiKey();
     } catch (err) {
       console.error("[d2tracker] API key check failed:", err);
-      BUNGIE_API_KEY = "";
-      localStorage.removeItem(LS_API_KEY);
-      $("#api-key-input").value = "";
+      const { discardKey, message } = explainKeyFailure(err);
+      if (discardKey) {
+        BUNGIE_API_KEY = "";
+        localStorage.removeItem(LS_API_KEY);
+        $("#api-key-input").value = "";
+      }
       $("#api-key-section").hidden = false;
-      setKeyMessage(
-        API_KEY_ERROR_CODES.has(err.errorCode)
-          ? "Bungie rejected that API key (invalid or expired). Create a new one at bungie.net/en/Application and paste it here."
-          : `Could not verify the key: ${err.message}`,
-        true
-      );
+      setKeyMessage(message, true);
       return;
     }
 
